@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>视障语义地图导航预览</title>
+  
+  <!-- 高德地图 JSAPI Loader -->
+  <script src="https://webapi.amap.com/loader.js"></script>
+  
+  <link rel="stylesheet" href="./src/style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- 顶部标题栏 -->
+    <header class="app-header">
+      <h1>🧭 视障语义地图导航预览</h1>
+      <span class="phase-tag">Phase 2 - 前端交互</span>
+    </header>
+
+    <!-- 主内容区 -->
+    <main class="app-main">
+      <!-- 左侧配置面板 -->
+      <aside class="sidebar">
+        <div id="config-panel-container"></div>
+        
+        <!-- 起终点信息展示 -->
+        <div class="route-info" id="route-info">
+          <h4>📍 导航选点</h4>
+          <div class="route-point">
+            <span class="point-label origin">起点</span>
+            <span class="point-value" id="origin-value">未设置</span>
+          </div>
+          <div class="route-point">
+            <span class="point-label destination">终点</span>
+            <span class="point-value" id="destination-value">未设置</span>
+          </div>
+          <button id="generate-preview-btn" class="btn btn-primary btn-generate" disabled>
+            🎬 生成推演播报
+          </button>
+        </div>
+      </aside>
+
+      <!-- 右侧地图区域 -->
+      <section class="map-container">
+        <div id="map-viewer"></div>
+      </section>
+    </main>
+
+    <!-- 街景弹窗 -->
+    <div id="street-view-modal" class="modal"></div>
+  </div>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>
