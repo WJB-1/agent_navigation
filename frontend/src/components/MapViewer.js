@@ -1,6 +1,5 @@
 /**
  * 地图查看器组件
- * 负责高德地图初始化、渲染和交互
  */
 
 import { getNearbyPoints } from '../services/api.js';
@@ -10,321 +9,249 @@ export class MapViewer {
     this.container = document.getElementById(containerId);
     this.map = null;
     this.markers = [];
-    this.currentCenter = { lng: 116.397428, lat: 39.90923 }; // 北京默认中心
-    this.onMapMoveEnd = null; // 地图移动结束回调
-    this.onMarkerClick = null; // 标记点击回调
-    this.onContextMenu = null; // 右键菜单回调
-    
+    this.onReady = null;
+    this.onMarkerClick = null;
+    this.onContextMenu = null;
+
+    // 直接开始初始化
     this.init();
   }
 
-  /**
-   * 初始化地图
-   */
   async init() {
-    // 检查 JSAPI Loader 是否加载
-    if (typeof AMapLoader === 'undefined') {
-      console.error('❌ 高德地图 Loader 未加载');
-      this.showError('高德地图 Loader 未加载，请检查网络连接');
-      return;
-    }
+    console.log('🗺️  MapViewer 初始化...');
 
     try {
-      // 使用 JSAPI Loader 加载地图和插件
+      // 等待 AMapLoader 可用
+      while (typeof AMapLoader === 'undefined') {
+        await new Promise(r => setTimeout(r, 100));
+      }
+
+      console.log('✅ AMapLoader 可用');
+
+      // 使用 Loader 加载 AMap
       const AMap = await AMapLoader.load({
-        key: '0beb99f14b04f13a734c81c032b9a8f1',
-        version: '2.0',
-        plugins: ['AMap.Scale', 'AMap.ToolBar', 'AMap.Geolocation', 'AMap.Walking']
+        key: "6e760d76e5650f0f9004c5412dcfc58e",
+        version: "2.0",
+        plugins: ['AMap.Scale', 'AMap.ToolBar']
       });
 
-      // 保存 AMap 到全局（供其他方法使用）
-      window.AMap = AMap;
+      console.log('✅ AMap 加载成功，版本:', AMap.version);
 
-      // 初始化地图
+      // 创建地图 - 默认定位到广州体育中心
       this.map = new AMap.Map(this.container, {
-        zoom: 15,
-        center: [this.currentCenter.lng, this.currentCenter.lat],
-        viewMode: '2D',
-        resizeEnable: true,
-        mapStyle: 'amap://styles/normal'
+        zoom: 17,
+        center: [113.3245, 23.1358], // 广州体育中心坐标
+        viewMode: '2D'
       });
 
-      // 添加地图控件
-      this.addControls();
+      // 尝试获取用户当前位置
+      this.getCurrentPosition();
+
+      console.log('✅ 地图创建成功');
+
+      // 添加控件
+      this.map.addControl(new AMap.Scale());
+      this.map.addControl(new AMap.ToolBar({ position: 'RB' }));
 
       // 绑定事件
-      this.bindEvents();
-
-      console.log('✅ 地图初始化成功');
-      
-      // 触发首次数据加载
-      this.loadNearbyPoints();
-
-    } catch (error) {
-      console.error('❌ 地图初始化失败:', error);
-      this.showError('地图初始化失败: ' + error.message);
-    }
-  }
-
-  /**
-   * 添加地图控件
-   */
-  addControls() {
-    // 添加缩放控件
-    this.map.addControl(new AMap.Scale());
-    
-    // 添加工具条
-    this.map.addControl(new AMap.ToolBar({
-      position: 'RB'
-    }));
-
-    // 添加定位控件
-    this.map.addControl(new AMap.Geolocation({
-      showButton: true,
-      buttonPosition: 'LB',
-      buttonOffset: new AMap.Pixel(10, 20),
-      showMarker: true,
-      showCircle: true,
-      circleOptions: {
-        strokeColor: '#4a90d9',
-        strokeWeight: 2,
-        fillColor: '#4a90d9',
-        fillOpacity: 0.2
-      }
-    }));
-  }
-
-  /**
-   * 绑定地图事件
-   */
-  bindEvents() {
-    // 地图移动结束事件
-    this.map.on('moveend', () => {
-      const center = this.map.getCenter();
-      this.currentCenter = {
-        lng: center.lng,
-        lat: center.lat
-      };
-      
-      console.log('🗺️  地图中心变化:', this.currentCenter);
-      
-      // 加载附近采样点
-      this.loadNearbyPoints();
-      
-      // 触发回调
-      if (this.onMapMoveEnd) {
-        this.onMapMoveEnd(this.currentCenter);
-      }
-    });
-
-    // 地图缩放结束事件
-    this.map.on('zoomend', () => {
-      console.log('🔍 地图缩放级别:', this.map.getZoom());
-    });
-
-    // 右键菜单事件
-    this.map.on('rightclick', (e) => {
-      const lnglat = e.lnglat;
-      console.log('🖱️  地图右键点击:', lnglat);
-      
-      if (this.onContextMenu) {
-        this.onContextMenu(lnglat.lng, lnglat.lat, e.pixel);
-      }
-    });
-  }
-
-  /**
-   * 加载附近采样点
-   */
-  async loadNearbyPoints() {
-    try {
-      const response = await getNearbyPoints(
-        this.currentCenter.lat,
-        this.currentCenter.lng,
-        1000 // 1km 半径
-      );
-
-      const points = response.data.points || [];
-      console.log(`📍 加载到 ${points.length} 个采样点`);
-
-      // 清除旧标记
-      this.clearMarkers();
-
-      // 添加新标记
-      points.forEach(point => {
-        this.addPointMarker(point);
+      this.map.on('moveend', () => {
+        const c = this.map.getCenter();
+        this.loadNearbyPoints(c.lat, c.lng);
       });
 
-    } catch (error) {
-      console.error('❌ 加载采样点失败:', error);
-    }
-  }
+      this.map.on('rightclick', (e) => {
+        if (this.onContextMenu) {
+          this.onContextMenu(e.lnglat.lng, e.lnglat.lat, e.pixel);
+        }
+      });
 
-  /**
-   * 添加采样点标记
-   */
-  addPointMarker(point) {
-    const { location, point_id, scene_description } = point;
-    
-    // 创建自定义标记内容
-    const markerContent = document.createElement('div');
-    markerContent.className = 'poi-marker';
-    markerContent.innerHTML = `
-      <div class="poi-icon">📸</div>
-      <div class="poi-label">街景点</div>
-    `;
-
-    // 创建标记
-    const marker = new AMap.Marker({
-      position: [location.longitude, location.latitude],
-      content: markerContent,
-      offset: new AMap.Pixel(-20, -40),
-      extData: point // 存储完整数据
-    });
-
-    // 点击事件
-    marker.on('click', () => {
-      console.log('📍 点击采样点:', point_id);
-      if (this.onMarkerClick) {
-        this.onMarkerClick(point);
+      // 触发就绪
+      if (this.onReady) {
+        this.onReady(this.map);
       }
-    });
 
-    // 鼠标悬停提示
-    marker.on('mouseover', () => {
-      markerContent.style.transform = 'scale(1.1)';
-    });
+      // 加载采样点
+      const c = this.map.getCenter();
+      this.loadNearbyPoints(c.lat, c.lng);
 
-    marker.on('mouseout', () => {
-      markerContent.style.transform = 'scale(1)';
-    });
-
-    // 添加到地图
-    marker.setMap(this.map);
-    this.markers.push(marker);
-  }
-
-  /**
-   * 清除所有标记
-   */
-  clearMarkers() {
-    this.markers.forEach(marker => {
-      marker.setMap(null);
-    });
-    this.markers = [];
-  }
-
-  /**
-   * 添加起点标记
-   */
-  addOriginMarker(lng, lat) {
-    // 移除已有的起点标记
-    if (this.originMarker) {
-      this.originMarker.setMap(null);
+    } catch (err) {
+      console.error('❌ 地图初始化失败:', err);
+      this.container.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:red;">地图加载失败: ${err.message}</div>`;
     }
+  }
 
-    const markerContent = document.createElement('div');
-    markerContent.className = 'route-marker origin';
-    markerContent.innerHTML = `
-      <div class="marker-pin">
-        <span class="marker-icon">🟢</span>
-        <span class="marker-text">起点</span>
-      </div>
-    `;
+  async loadNearbyPoints(lat, lng) {
+    try {
+      const res = await getNearbyPoints(lat, lng, 1000);
+      const points = res.data?.points || [];
+      console.log(`📍 找到 ${points.length} 个采样点`);
 
+      this.markers.forEach(m => m.setMap(null));
+      this.markers = [];
+
+      points.forEach(p => {
+        const marker = new AMap.Marker({
+          position: [p.location.longitude, p.location.latitude],
+          content: '<div style="background:#1890ff;color:#fff;padding:4px 8px;border-radius:4px;font-size:12px;">📍 ' + p.point_id + '</div>',
+          offset: new AMap.Pixel(-20, -20)
+        });
+
+        marker.on('click', () => {
+          if (this.onMarkerClick) this.onMarkerClick(p);
+        });
+
+        marker.setMap(this.map);
+        this.markers.push(marker);
+      });
+
+    } catch (err) {
+      console.error('❌ 加载采样点失败:', err);
+    }
+  }
+
+  setOrigin(lng, lat) {
+    if (this.originMarker) this.originMarker.setMap(null);
     this.originMarker = new AMap.Marker({
       position: [lng, lat],
-      content: markerContent,
-      offset: new AMap.Pixel(-30, -50),
-      animation: 'AMAP_ANIMATION_DROP'
+      content: '<div style="background:#52c41a;color:#fff;padding:6px 12px;border-radius:50%;font-weight:bold;">起</div>',
+      offset: new AMap.Pixel(-15, -15)
     });
-
     this.originMarker.setMap(this.map);
   }
 
-  /**
-   * 添加终点标记
-   */
-  addDestinationMarker(lng, lat) {
-    // 移除已有的终点标记
-    if (this.destinationMarker) {
-      this.destinationMarker.setMap(null);
-    }
-
-    const markerContent = document.createElement('div');
-    markerContent.className = 'route-marker destination';
-    markerContent.innerHTML = `
-      <div class="marker-pin">
-        <span class="marker-icon">🔴</span>
-        <span class="marker-text">终点</span>
-      </div>
-    `;
-
-    this.destinationMarker = new AMap.Marker({
+  setDestination(lng, lat) {
+    if (this.destMarker) this.destMarker.setMap(null);
+    this.destMarker = new AMap.Marker({
       position: [lng, lat],
-      content: markerContent,
-      offset: new AMap.Pixel(-30, -50),
-      animation: 'AMAP_ANIMATION_DROP'
+      content: '<div style="background:#f5222d;color:#fff;padding:6px 12px;border-radius:50%;font-weight:bold;">终</div>',
+      offset: new AMap.Pixel(-15, -15)
     });
-
-    this.destinationMarker.setMap(this.map);
+    this.destMarker.setMap(this.map);
   }
 
   /**
-   * 清除路线标记
+   * 获取浏览器当前位置
    */
-  clearRouteMarkers() {
-    if (this.originMarker) {
-      this.originMarker.setMap(null);
-      this.originMarker = null;
+  getCurrentPosition() {
+    if (!navigator.geolocation) {
+      console.log('浏览器不支持定位');
+      return;
     }
-    if (this.destinationMarker) {
-      this.destinationMarker.setMap(null);
-      this.destinationMarker = null;
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const { latitude, longitude } = position.coords;
+        console.log('📍 获取到当前位置:', latitude, longitude);
+
+        // 移动到当前位置
+        this.map.setCenter([longitude, latitude]);
+        this.map.setZoom(17);
+
+        // 添加当前位置标记
+        if (this.currentPosMarker) {
+          this.currentPosMarker.setMap(null);
+        }
+        this.currentPosMarker = new AMap.Marker({
+          position: [longitude, latitude],
+          content: '<div style="background:#1890ff;color:#fff;padding:6px 12px;border-radius:50%;font-weight:bold;border:2px solid #fff;">我</div>',
+          offset: new AMap.Pixel(-15, -15),
+          zIndex: 100
+        });
+        this.currentPosMarker.setMap(this.map);
+
+        // 加载附近采样点
+        this.loadNearbyPoints(latitude, longitude);
+      },
+      (error) => {
+        console.log('定位失败:', error.message);
+        // 使用默认位置（广州体育中心）
+        this.loadNearbyPoints(23.1358, 113.3245);
+      },
+      { enableHighAccuracy: true, timeout: 5000 }
+    );
+  }
+
+  /**
+   * Phase 5: 高亮显示关键节点
+   * 在地图上标记推演路线的关键决策点
+   * @param {Array} keyNodes - 关键节点数组
+   */
+  highlightKeyNodes(keyNodes) {
+    if (!this.map || !keyNodes || keyNodes.length === 0) return;
+
+    console.log('[MapViewer] 标记关键节点:', keyNodes.length);
+
+    // 清除之前的关键节点标记
+    if (this.keyNodeMarkers) {
+      this.map.remove(this.keyNodeMarkers);
+    }
+    this.keyNodeMarkers = [];
+
+    // 创建关键节点标记
+    for (let i = 0; i < keyNodes.length; i++) {
+      const node = keyNodes[i];
+      if (!node.coordinates || node.coordinates.length < 2) continue;
+
+      const [lng, lat] = node.coordinates;
+
+      // 创建标记
+      const marker = new AMap.Marker({
+        position: [lng, lat],
+        title: `节点 ${i + 1}: ${node.action || '直行'}`,
+        label: {
+          content: `<div style="
+            background: #FFD700;
+            color: #000;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: bold;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+          ">${i + 1}</div>`,
+          offset: new AMap.Pixel(0, -20)
+        },
+        icon: new AMap.Icon({
+          size: new AMap.Size(24, 24),
+          image: 'https://webapi.amap.com/theme/v1.3/markers/n/mark_b.png',
+          imageSize: new AMap.Size(24, 24)
+        })
+      });
+
+      marker.setMap(this.map);
+      this.keyNodeMarkers.push(marker);
+    }
+
+    // 调整视野以包含所有关键节点
+    if (this.keyNodeMarkers.length > 0) {
+      this.map.setFitView(this.keyNodeMarkers, false, [50, 50, 50, 50]);
     }
   }
 
   /**
-   * 设置地图中心
+   * Phase 5: 平移到指定节点并高亮
+   * 用于语音播报时的地图联动
+   * @param {number} lng - 经度
+   * @param {number} lat - 纬度
+   * @param {number} nodeIndex - 节点索引
    */
-  setCenter(lng, lat) {
-    this.map.setCenter([lng, lat]);
+  panToNode(lng, lat, nodeIndex) {
+    if (!this.map) return;
+
+    // 平滑移动到节点位置
+    this.map.panTo([lng, lat]);
+
+    // 可以在这里添加节点高亮效果
+    console.log(`[MapViewer] 聚焦到节点 ${nodeIndex}: [${lng}, ${lat}]`);
   }
 
   /**
-   * 获取地图中心
+   * Phase 5: 清除关键节点标记
    */
-  getCenter() {
-    const center = this.map.getCenter();
-    return {
-      lng: center.lng,
-      lat: center.lat
-    };
-  }
-
-  /**
-   * 显示错误信息
-   */
-  showError(message) {
-    this.container.innerHTML = `
-      <div class="map-error">
-        <div class="error-icon">⚠️</div>
-        <div class="error-message">${message}</div>
-      </div>
-    `;
-  }
-
-  /**
-   * 销毁地图
-   */
-  destroy() {
-    this.clearMarkers();
-    this.clearRouteMarkers();
-    if (this.map) {
-      this.map.destroy();
-      this.map = null;
+  clearKeyNodes() {
+    if (this.keyNodeMarkers) {
+      this.map.remove(this.keyNodeMarkers);
+      this.keyNodeMarkers = [];
     }
   }
 }
 
-export default MapViewer;

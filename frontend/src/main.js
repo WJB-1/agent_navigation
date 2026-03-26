@@ -1,231 +1,267 @@
 /**
  * 前端主入口
- * 初始化各个组件并协调数据流
+ * Phase 5: 全链路联调与语音渲染
  */
 
 import { ConfigPanel } from './components/ConfigPanel.js';
 import { MapViewer } from './components/MapViewer.js';
 import { StreetViewModal } from './components/StreetViewModal.js';
-import { healthCheck } from './services/api.js';
+import { PreviewPlayer } from './components/PreviewPlayer.js';
+import { generateNavigationPreview, testNavigationPreview, previewHealthCheck } from './services/api.js';
 
 // 全局状态
 window.appState = {
-  origin: null,      // 起点坐标 {lng, lat}
-  destination: null, // 终点坐标 {lng, lat}
-  map: null,         // 高德地图实例
-  markers: []        // 当前显示的标记点
+  origin: null,
+  destination: null,
+  map: null,
+  previewPlayer: null
 };
 
-/**
- * 检查后端服务健康状态
- */
-async function checkBackendHealth() {
-  try {
-    const health = await healthCheck();
-    console.log('✅ 后端服务状态:', health);
-    return true;
-  } catch (error) {
-    console.error('❌ 后端服务连接失败:', error);
-    alert('无法连接到后端服务，请确保后端服务已启动 (cd backend && node server.js)');
-    return false;
-  }
-}
+// 初始化
+async function init() {
+  console.log('🚀 初始化...');
 
-/**
- * 初始化应用
- */
-async function initApp() {
-  console.log('🚀 初始化视障语义地图导航预览...');
-  
-  // 检查后端健康状态
-  const isHealthy = await checkBackendHealth();
-  if (!isHealthy) {
-    return;
-  }
-  
-  // 初始化配置面板
-  const configPanel = new ConfigPanel('config-panel-container');
-  console.log('✅ 配置面板已初始化');
-  
+  // 初始化面板
+  new ConfigPanel('config-panel-container');
+
   // 初始化地图
-  const mapViewer = new MapViewer('map-viewer');
-  window.appState.mapViewer = mapViewer;
-  window.appState.map = mapViewer.map;
-  
-  // 初始化街景弹窗
-  const streetViewModal = new StreetViewModal('street-view-modal');
-  
-  // 地图标记点击事件 - 打开街景弹窗
-  mapViewer.onMarkerClick = (point) => {
-    streetViewModal.open(point);
+  const viewer = new MapViewer('map-viewer');
+  window.appState.mapViewer = viewer;
+
+  // Phase 5: 初始化推演播放器
+  const previewPlayer = new PreviewPlayer('preview-player-container');
+  previewPlayer.init();
+  window.appState.previewPlayer = previewPlayer;
+
+  viewer.onReady = (map) => {
+    console.log('✅ 地图就绪');
+    window.appState.map = map;
+
+    const modal = new StreetViewModal('street-view-modal');
+    viewer.onMarkerClick = (p) => modal.open(p);
+    viewer.onContextMenu = (lng, lat, px) => showMenu(lng, lat, px, viewer);
   };
-  
-  // 地图右键菜单事件
-  mapViewer.onContextMenu = (lng, lat, pixel) => {
-    showContextMenu(lng, lat, pixel);
-  };
-  
-  console.log('✅ 地图组件已初始化');
-  
-  // 初始化起终点状态显示
-  updateRouteDisplay();
-  
-  console.log('✅ 应用初始化完成');
+
+  // 绑定导航测试按钮
+  bindNavPreviewButtons();
 }
 
 /**
- * 更新起终点显示
+ * 绑定导航预览测试按钮
  */
-function updateRouteDisplay() {
-  const originEl = document.getElementById('origin-value');
-  const destinationEl = document.getElementById('destination-value');
+function bindNavPreviewButtons() {
+  const testBtn = document.getElementById('test-nav-btn');
+  const healthBtn = document.getElementById('health-check-btn');
   const generateBtn = document.getElementById('generate-preview-btn');
-  
-  if (window.appState.origin) {
-    const { lng, lat } = window.appState.origin;
-    originEl.textContent = `${lng.toFixed(6)}, ${lat.toFixed(6)}`;
-    originEl.classList.add('set');
-  } else {
-    originEl.textContent = '未设置';
-    originEl.classList.remove('set');
-  }
-  
-  if (window.appState.destination) {
-    const { lng, lat } = window.appState.destination;
-    destinationEl.textContent = `${lng.toFixed(6)}, ${lat.toFixed(6)}`;
-    destinationEl.classList.add('set');
-  } else {
-    destinationEl.textContent = '未设置';
-    destinationEl.classList.remove('set');
-  }
-  
-  // 只有起点和终点都设置了，才启用生成按钮
-  const canGenerate = window.appState.origin && window.appState.destination;
-  generateBtn.disabled = !canGenerate;
-}
 
-/**
- * 设置起点
- */
-window.setOrigin = function(lng, lat) {
-  window.appState.origin = { lng, lat };
-  updateRouteDisplay();
-  console.log('📍 起点已设置:', lng, lat);
-};
-
-/**
- * 设置终点
- */
-window.setDestination = function(lng, lat) {
-  window.appState.destination = { lng, lat };
-  updateRouteDisplay();
-  console.log('📍 终点已设置:', lng, lat);
-};
-
-/**
- * 清除起终点
- */
-window.clearRoutePoints = function() {
-  window.appState.origin = null;
-  window.appState.destination = null;
-  updateRouteDisplay();
-  console.log('🗑️  起终点已清除');
-};
-
-// 监听生成推演播报按钮
-document.addEventListener('DOMContentLoaded', () => {
-  const generateBtn = document.getElementById('generate-preview-btn');
-  if (generateBtn) {
-    generateBtn.addEventListener('click', () => {
-      if (window.appState.origin && window.appState.destination) {
-        console.log('🎬 生成推演播报:');
-        console.log('  起点:', window.appState.origin);
-        console.log('  终点:', window.appState.destination);
-        // Phase 3/4 将实现实际的后端请求
-        alert('起终点已就绪！坐标已输出到控制台。');
-      }
+  if (testBtn) {
+    testBtn.addEventListener('click', async () => {
+      await runNavTest('preset');
     });
   }
-});
 
-/**
- * 显示右键菜单
- */
-function showContextMenu(lng, lat, pixel) {
-  // 移除已存在的菜单
-  const existingMenu = document.querySelector('.context-menu');
-  if (existingMenu) {
-    existingMenu.remove();
+  if (healthBtn) {
+    healthBtn.addEventListener('click', async () => {
+      await checkPreviewHealth();
+    });
   }
 
-  // 创建菜单
-  const menu = document.createElement('div');
-  menu.className = 'context-menu';
-  menu.style.left = `${pixel.x}px`;
-  menu.style.top = `${pixel.y}px`;
-  
-  menu.innerHTML = `
-    <div class="context-menu-item" data-action="set-origin">
-      <span class="icon">🟢</span>
-      <span>设为起点</span>
+  if (generateBtn) {
+    generateBtn.addEventListener('click', async () => {
+      await runNavTest('selected');
+    });
+  }
+}
+
+/**
+ * 运行导航测试
+ * @param {string} mode - 'preset' 使用预设坐标, 'selected' 使用选中的起终点
+ */
+async function runNavTest(mode) {
+  const loadingEl = document.getElementById('preview-loading');
+  const resultEl = document.getElementById('preview-result');
+  const errorEl = document.getElementById('preview-error');
+  const generateBtn = document.getElementById('generate-preview-btn');
+
+  // 防抖与锁定 - 禁用按钮防止重复点击
+  if (generateBtn) {
+    generateBtn.disabled = true;
+    generateBtn.textContent = '推演中...';
+  }
+
+  // 重置显示
+  loadingEl.classList.remove('hidden');
+  resultEl.classList.add('hidden');
+  errorEl.classList.add('hidden');
+
+  // Phase 5: 更新 Loading 文案，说明长时间等待的原因
+  const loadingText = loadingEl.querySelector('.loading-text');
+  if (loadingText) {
+    loadingText.innerHTML = `
+      <div>🧠 正在进行多智能体环境感知推演...</div>
+      <div style="font-size: 12px; color: #666; margin-top: 8px;">
+        需要调用视觉模型分析街景图片，预计耗时 15-30 秒，请稍候
+      </div>
+    `;
+  }
+
+  try {
+    let result;
+
+    if (mode === 'preset') {
+      console.log('🧪 测试预设路线...');
+      result = await testNavigationPreview();
+    } else {
+      const { origin, destination } = window.appState;
+      if (!origin || !destination) {
+        throw new Error('请先设置起点和终点');
+      }
+      const originStr = `${origin.lng},${origin.lat}`;
+      const destStr = `${destination.lng},${destination.lat}`;
+      console.log(`🧭 规划路线: ${originStr} -> ${destStr}`);
+      result = await generateNavigationPreview(originStr, destStr);
+    }
+
+    // Phase 5: 使用 PreviewPlayer 展示结果
+    if (window.appState.previewPlayer) {
+      window.appState.previewPlayer.show(result.data);
+    }
+
+    // Phase 5: 在地图上标记关键节点
+    if (window.appState.mapViewer && result.data.key_nodes) {
+      window.appState.mapViewer.highlightKeyNodes(result.data.key_nodes);
+    }
+
+    // 保留原有显示逻辑作为备份
+    displayPreviewResult(result.data);
+
+  } catch (error) {
+    console.error('导航测试失败:', error);
+    errorEl.textContent = `❌ ${error.message}`;
+    errorEl.classList.remove('hidden');
+  } finally {
+    loadingEl.classList.add('hidden');
+
+    // 恢复按钮
+    if (generateBtn) {
+      generateBtn.disabled = false;
+      generateBtn.textContent = '生成推演播报';
+    }
+  }
+}
+
+/**
+ * 检查预览服务健康状态
+ */
+async function checkPreviewHealth() {
+  const resultEl = document.getElementById('preview-result');
+  const errorEl = document.getElementById('preview-error');
+
+  resultEl.classList.add('hidden');
+  errorEl.classList.add('hidden');
+
+  try {
+    const result = await previewHealthCheck();
+    console.log('健康检查结果:', result);
+
+    if (result.checks.amap_api === 'connected') {
+      alert('✅ 高德 API 连接正常\n✅ 中间件算法正常');
+    } else {
+      alert('❌ 高德 API 连接失败\n请检查 AMAP_WEB_KEY 配置');
+    }
+  } catch (error) {
+    errorEl.textContent = `❌ 健康检查失败: ${error.message}`;
+    errorEl.classList.remove('hidden');
+  }
+}
+
+/**
+ * 显示导航预览结果
+ */
+function displayPreviewResult(data) {
+  const resultEl = document.getElementById('preview-result');
+  const summaryEl = resultEl.querySelector('.preview-summary');
+  const nodesEl = resultEl.querySelector('.preview-nodes');
+
+  // 显示概要
+  summaryEl.innerHTML = `
+    <div class="summary-item">
+      <span class="label">📏 总距离:</span>
+      <span class="value">${data.route_summary.total_distance}</span>
     </div>
-    <div class="context-menu-item" data-action="set-destination">
-      <span class="icon">🔴</span>
-      <span>设为终点</span>
+    <div class="summary-item">
+      <span class="label">⏱️ 预计时间:</span>
+      <span class="value">${data.route_summary.duration_estimate}</span>
     </div>
-    <div class="context-menu-item" data-action="clear">
-      <span class="icon">🗑️</span>
-      <span>清除起终点</span>
+    <div class="summary-item">
+      <span class="label">🎯 关键节点:</span>
+      <span class="value">${data.route_summary.filtered_nodes_count} / ${data.route_summary.original_steps_count}</span>
+      <span class="compression">(压缩 ${data.route_summary.compression_ratio})</span>
     </div>
   `;
 
-  // 绑定点击事件
-  menu.querySelectorAll('.context-menu-item').forEach(item => {
-    item.addEventListener('click', () => {
-      const action = item.dataset.action;
-      
-      switch (action) {
-        case 'set-origin':
-          window.setOrigin(lng, lat);
-          if (window.appState.mapViewer) {
-            window.appState.mapViewer.addOriginMarker(lng, lat);
-          }
-          break;
-        case 'set-destination':
-          window.setDestination(lng, lat);
-          if (window.appState.mapViewer) {
-            window.appState.mapViewer.addDestinationMarker(lng, lat);
-          }
-          break;
-        case 'clear':
-          window.clearRoutePoints();
-          if (window.appState.mapViewer) {
-            window.appState.mapViewer.clearRouteMarkers();
-          }
-          break;
-      }
-      
-      menu.remove();
-    });
-  });
+  // 显示关键节点
+  nodesEl.innerHTML = data.key_nodes.map((node, i) => `
+    <div class="node-card">
+      <div class="node-header">
+        <span class="node-index">${node.node_index}</span>
+        <span class="node-action">${node.action}</span>
+        <span class="node-clock">🕐 ${node.clock_direction}</span>
+      </div>
+      <div class="node-body">
+        <p class="node-instruction">${node.instruction}</p>
+        <div class="node-meta">
+          <span>📍 ${node.distance_from_start}</span>
+          <span>🛣️ ${node.road || '未知道路'}</span>
+        </div>
+      </div>
+    </div>
+  `).join('');
 
-  // 添加到页面
-  document.body.appendChild(menu);
-
-  // 点击其他地方关闭菜单
-  const closeMenu = (e) => {
-    if (!menu.contains(e.target)) {
-      menu.remove();
-      document.removeEventListener('click', closeMenu);
-    }
-  };
-  
-  setTimeout(() => {
-    document.addEventListener('click', closeMenu);
-  }, 0);
+  resultEl.classList.remove('hidden');
+  resultEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
-// 启动应用
-initApp().catch(console.error);
+function showMenu(lng, lat, px, viewer) {
+  const menu = document.createElement('div');
+  menu.style.cssText = `position:fixed;left:${px.x}px;top:${px.y}px;background:#fff;border:1px solid #ddd;border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,0.15);z-index:1000;padding:8px 0;`;
 
-export { updateRouteDisplay, showContextMenu };
+  const btn = (text, cb) => {
+    const b = document.createElement('button');
+    b.textContent = text;
+    b.style.cssText = 'display:block;width:100%;padding:8px 16px;border:none;background:none;cursor:pointer;';
+    b.onmouseenter = () => b.style.background = '#f5f5f5';
+    b.onmouseleave = () => b.style.background = 'none';
+    b.onclick = () => { cb(); menu.remove(); };
+    return b;
+  };
+
+  menu.appendChild(btn('设为起点', () => {
+    window.appState.origin = { lng, lat };
+    viewer.setOrigin(lng, lat);
+    updateUI();
+  }));
+
+  menu.appendChild(btn('设为终点', () => {
+    window.appState.destination = { lng, lat };
+    viewer.setDestination(lng, lat);
+    updateUI();
+  }));
+
+  document.body.appendChild(menu);
+  setTimeout(() => document.addEventListener('click', (e) => {
+    if (!menu.contains(e.target)) menu.remove();
+  }, { once: true }), 0);
+}
+
+function updateUI() {
+  const o = window.appState.origin;
+  const d = window.appState.destination;
+
+  document.getElementById('origin-value').textContent = o ? `${o.lng.toFixed(6)}, ${o.lat.toFixed(6)}` : '未设置';
+  document.getElementById('destination-value').textContent = d ? `${d.lng.toFixed(6)}, ${d.lat.toFixed(6)}` : '未设置';
+  document.getElementById('generate-preview-btn').disabled = !(o && d);
+}
+
+// 启动
+init().catch(console.error);

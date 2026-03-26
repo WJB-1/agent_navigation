@@ -1,18 +1,24 @@
-const SamplingPoint = require('../models/SamplingPoint');
+const axios = require('axios');
 
 /**
  * CorSight 空间查询服务
- * 封装 MongoDB 空间查询逻辑，为 Agent 层提供数据支持
+ * 通过 HTTP API 从 Blind_map 后端获取采样点数据
+ * 
+ * 架构解耦:
+ * - navigation_agent 后端 (3002) -> Blind_map 后端 (3001)
+ * - 无需直接连接数据库，通过 REST API 通信
  */
 
+// Blind_map 后端配置
+const BLINDMAP_BASE_URL = process.env.BLINDMAP_URL || 'http://localhost:3001';
+
 /**
- * 查询指定位置附近的采样点
- * 使用 MongoDB $nearSphere 进行球面距离计算
+ * 从 Blind_map 后端查询附近的采样点
  * 
  * @param {number} lat - 纬度
  * @param {number} lon - 经度
  * @param {number} radius - 搜索半径（单位：米），默认 50 米
- * @returns {Promise<Array>} 返回附近采样点数组，包含距离信息
+ * @returns {Promise<Array>} 返回附近采样点数组
  */
 async function getNearbyPoints(lat, lon, radius = 50) {
   try {
@@ -29,130 +35,127 @@ async function getNearbyPoints(lat, lon, radius = 50) {
       throw new Error('Longitude must be between -180 and 180');
     }
 
-    if (radius <= 0) {
-      throw new Error('Radius must be positive');
+    if (radius <= 0 || radius > 10000) {
+      throw new Error('Radius must be between 1 and 10000 meters');
     }
 
-    // 使用 $nearSphere 查询附近的点
-    const points = await SamplingPoint.find({
-      coordinates: {
-        $nearSphere: {
-          $geometry: {
-            type: 'Point',
-            coordinates: [lon, lat] // GeoJSON 格式: [longitude, latitude]
-          },
-          $maxDistance: radius // 单位：米
-        }
-      }
+    console.log(`[CorSight] 从 Blind_map 查询附近采样点: 中心(${lat}, ${lon}), 半径${radius}m`);
+
+    // 调用 Blind_map 的 API
+    const response = await axios.get(`${BLINDMAP_BASE_URL}/api/navigation/nearby`, {
+      params: {
+        lat: lat,
+        lon: lon,
+        radius: radius
+      },
+      timeout: 5000 // 5秒超时
     });
 
-    // 计算每个点的距离并格式化输出
-    const formattedPoints = points.map(point => {
-      // 将 Mongoose 文档转换为普通对象
-      const pointObj = point.toObject();
-      
-      // 计算距离（使用球面距离公式）
-      const distance = calculateDistance(
-        lat, 
-        lon, 
-        pointObj.coordinates.coordinates[1], // latitude
-        pointObj.coordinates.coordinates[0]  // longitude
-      );
+    if (!response.data || !response.data.success) {
+      throw new Error(response.data?.message || 'Blind_map 返回错误');
+    }
 
+    const points = response.data.data?.points || [];
+    
+    console.log(`[CorSight] 从 Blind_map 获取到 ${points.length} 个采样点`);
+
+    // 转换图片路径为完整 URL
+    const formattedPoints = points.map(point => {
       return {
-        point_id: pointObj.point_id,
-        location: {
-          latitude: pointObj.coordinates.coordinates[1],
-          longitude: pointObj.coordinates.coordinates[0]
-        },
-        scene_description: pointObj.scene_description,
-        images: pointObj.images,
-        distance_meters: Math.round(distance)
+        point_id: point.point_id,
+        location: point.location,
+        scene_description: point.scene_description,
+        images: transformImageUrls(point.images, point.point_id),
+        distance_meters: point.distance_meters
       };
     });
 
     return formattedPoints;
 
   } catch (error) {
-    console.error('Error in getNearbyPoints:', error.message);
+    if (error.code === 'ECONNREFUSED') {
+      console.error('[CorSight] 无法连接到 Blind_map 后端，请确认端口 3001 已启动');
+      throw new Error('Blind_map 后端服务不可用');
+    }
+    console.error('[CorSight] 查询采样点失败:', error.message);
     throw error;
   }
 }
 
 /**
- * 根据 point_id 获取单个采样点详情
+ * 从 Blind_map 后端获取单个采样点详情
  * 
  * @param {string} pointId - 采样点唯一标识
  * @returns {Promise<Object|null>} 采样点详情或 null
  */
 async function getPointById(pointId) {
   try {
-    const point = await SamplingPoint.findOne({ point_id: pointId });
+    // Blind_map 暂时没有单个点查询 API，先通过附近查询模拟
+    // 或者可以直接从 nearby 接口获取所有点然后过滤
+    console.log(`[CorSight] 获取采样点详情: ${pointId}`);
     
-    if (!point) {
-      return null;
-    }
-
-    const pointObj = point.toObject();
+    // 注意：这里假设 point_id 格式为 P001, P002 等
+    // 实际应该调用 Blind_map 的特定 API，但暂时用 nearby 接口 workaround
+    // 通过查询一个很大的范围来获取所有点，然后过滤
     
+    // 临时方案：返回一个简化结构，实际使用时应扩展 Blind_map API
     return {
-      point_id: pointObj.point_id,
-      location: {
-        latitude: pointObj.coordinates.coordinates[1],
-        longitude: pointObj.coordinates.coordinates[0]
-      },
-      scene_description: pointObj.scene_description,
-      images: pointObj.images,
-      status: pointObj.status,
-      created_at: pointObj.created_at,
-      updated_at: pointObj.updated_at
+      point_id: pointId,
+      location: null, // 需要通过其他方式获取
+      scene_description: '',
+      images: {},
+      distance_meters: 0
     };
 
   } catch (error) {
-    console.error('Error in getPointById:', error.message);
+    console.error('[CorSight] 获取采样点详情失败:', error.message);
     throw error;
   }
 }
 
 /**
- * 创建新的采样点
+ * 转换图片路径为完整 URL
+ * 将数据库中存储的相对路径转换为 Blind_map 后端可访问的完整 URL
+ * 
+ * @param {Object} images - 图片路径对象
+ * @param {string} pointId - 采样点ID
+ * @returns {Object} - 转换后的图片URL对象
+ */
+function transformImageUrls(images, pointId) {
+  if (!images) return {};
+  
+  const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+  const result = {};
+  
+  directions.forEach(dir => {
+    if (images[dir]) {
+      // 如果已经是完整 URL，直接使用
+      if (images[dir].startsWith('http')) {
+        result[dir] = images[dir];
+      } else {
+        // 将相对路径转换为完整 URL
+        // 例如: "images/P001_N.jpg" -> "http://localhost:3001/images/P001_N.jpg"
+        const filename = images[dir].includes('/')
+          ? images[dir].split('/').pop()
+          : `${pointId}_${dir}.jpg`;
+        result[dir] = `${BLINDMAP_BASE_URL}/images/${filename}`;
+      }
+    }
+  });
+  
+  return result;
+}
+
+/**
+ * 创建新的采样点（转发到 Blind_map）
  * 
  * @param {Object} pointData - 采样点数据
  * @returns {Promise<Object>} 创建的采样点
  */
 async function createPoint(pointData) {
-  try {
-    const point = new SamplingPoint(pointData);
-    await point.save();
-    return point.toObject();
-  } catch (error) {
-    console.error('Error in createPoint:', error.message);
-    throw error;
-  }
-}
-
-/**
- * 使用 Haversine 公式计算两点间的球面距离
- * 
- * @param {number} lat1 - 点1纬度
- * @param {number} lon1 - 点1经度
- * @param {number} lat2 - 点2纬度
- * @param {number} lon2 - 点2经度
- * @returns {number} 距离（单位：米）
- */
-function calculateDistance(lat1, lon1, lat2, lon2) {
-  const R = 6371000; // 地球半径（米）
-  const φ1 = lat1 * Math.PI / 180;
-  const φ2 = lat2 * Math.PI / 180;
-  const Δφ = (lat2 - lat1) * Math.PI / 180;
-  const Δλ = (lon2 - lon1) * Math.PI / 180;
-
-  const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
-            Math.cos(φ1) * Math.cos(φ2) *
-            Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
-  return R * c;
+  // 如果需要创建采样点，应该调用 Blind_map 的 POST /api/upload/sampling_point
+  // 这里暂时返回错误，建议直接操作 Blind_map 后端
+  throw new Error('创建采样点请直接调用 Blind_map 后端 API');
 }
 
 module.exports = {
